@@ -18,6 +18,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           package="com.android.car.carlauncher">
 
+    <permission
+        android:name="com.android.car.carlauncher.permission.CONTROL_LAYOUT"
+        android:protectionLevel="signature" />
+
     <!-- System permission to access the CarProjectionManager for projection status-->
     <uses-permission android:name="android.car.permission.ACCESS_CAR_PROJECTION_STATUS"/>
     <!-- Permission to assign Activity to TDA -->
