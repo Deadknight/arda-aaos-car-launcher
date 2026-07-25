@@ -28,7 +28,10 @@ import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.TaskStackListener;
 import android.car.Car;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.Configuration;
 import android.database.ContentObserver;
 import android.os.Bundle;
@@ -42,6 +45,8 @@ import android.view.ViewGroup;
 import android.view.WindowManager;
 
 import androidx.collection.ArraySet;
+import androidx.constraintlayout.widget.ConstraintLayout;
+import androidx.constraintlayout.widget.ConstraintSet;
 import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentTransaction;
 import androidx.lifecycle.ViewModelProvider;
@@ -76,6 +81,17 @@ public class CarLauncher extends FragmentActivity {
     public static final String TAG = "CarLauncher";
     public static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
+    private static final String ACTION_TOGGLE_MAP_FULLSCREEN =
+            "com.android.car.carlauncher.action.TOGGLE_MAP_FULLSCREEN";
+    private static final String CONTROL_LAYOUT_PERMISSION =
+            "com.android.car.carlauncher.permission.CONTROL_LAYOUT";
+    private static final String SETTING_MAP_ON_RIGHT = "arda_launcher_map_on_right";
+    private static final String SETTING_MAP_WIDTH_PERCENT =
+            "arda_launcher_map_width_percent";
+    private static final int DEFAULT_MAP_WIDTH_PERCENT = 67;
+    private static final int MIN_MAP_WIDTH_PERCENT = 45;
+    private static final int MAX_MAP_WIDTH_PERCENT = 80;
+
     private ActivityManager mActivityManager;
     private Car mCar;
     private int mCarLauncherTaskId = INVALID_TASK_ID;
@@ -85,6 +101,25 @@ public class CarLauncher extends FragmentActivity {
     private boolean mIsReadyLogged;
     private boolean mUseSmallCanvasOptimizedMap;
     private ViewGroup mMapsCard;
+    private ConstraintLayout mLauncherRoot;
+    private View mTopCard;
+    private View mBottomCard;
+    private boolean mMapFullscreen;
+    private boolean mLayoutReceiverRegistered;
+    private ContentObserver mLauncherLayoutObserver;
+
+    private final BroadcastReceiver mLayoutToggleReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!ACTION_TOGGLE_MAP_FULLSCREEN.equals(intent.getAction())) {
+                return;
+            }
+            mMapFullscreen = !mMapFullscreen;
+            Log.i(TAG, "ARDA_LAUNCHER_MAP_FULLSCREEN=" + mMapFullscreen
+                    + " ARDA_LAUNCHER_HOME_CARDS_HIDDEN=" + mMapFullscreen);
+            applyArdaLauncherLayout();
+        }
+    };
 
     @VisibleForTesting
     CarLauncherViewModel mCarLauncherViewModel;
@@ -165,6 +200,7 @@ public class CarLauncher extends FragmentActivity {
             setContentView(R.layout.car_launcher_multiwindow);
         } else {
             setContentView(R.layout.car_launcher);
+            initializeArdaLauncherLayoutControls();
             // Passenger displays do not require TaskView Embedding
             if (!isPassengerDisplay) {
                 mUseSmallCanvasOptimizedMap =
@@ -242,6 +278,8 @@ public class CarLauncher extends FragmentActivity {
     protected void onDestroy() {
         super.onDestroy();
 
+        releaseArdaLauncherLayoutControls();
+
         if (isDewdActive()) {
             // no-op
             return;
@@ -250,6 +288,191 @@ public class CarLauncher extends FragmentActivity {
         TaskStackChangeListeners.getInstance().unregisterTaskStackListener(mTaskStackListener);
         unregisterTosContentObserver();
         release();
+    }
+
+    private void initializeArdaLauncherLayoutControls() {
+        mLauncherRoot = findViewById(R.id.launcher_root);
+        mTopCard = findViewById(R.id.top_card);
+        mBottomCard = findViewById(R.id.bottom_card);
+        mMapsCard = findViewById(R.id.maps_card);
+
+        if (mLauncherRoot == null || mMapsCard == null) {
+            return;
+        }
+
+        registerReceiver(
+                mLayoutToggleReceiver,
+                new IntentFilter(ACTION_TOGGLE_MAP_FULLSCREEN),
+                CONTROL_LAYOUT_PERMISSION,
+                null,
+                Context.RECEIVER_EXPORTED);
+        mLayoutReceiverRegistered = true;
+
+        mLauncherLayoutObserver = new ContentObserver(new Handler(getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange) {
+                applyArdaLauncherLayout();
+            }
+        };
+        getContentResolver().registerContentObserver(
+                Settings.Global.getUriFor(SETTING_MAP_ON_RIGHT),
+                false,
+                mLauncherLayoutObserver);
+        getContentResolver().registerContentObserver(
+                Settings.Global.getUriFor(SETTING_MAP_WIDTH_PERCENT),
+                false,
+                mLauncherLayoutObserver);
+
+        mLauncherRoot.post(this::applyArdaLauncherLayout);
+    }
+
+    private void releaseArdaLauncherLayoutControls() {
+        if (mLauncherLayoutObserver != null) {
+            getContentResolver().unregisterContentObserver(mLauncherLayoutObserver);
+            mLauncherLayoutObserver = null;
+        }
+        if (mLayoutReceiverRegistered) {
+            unregisterReceiver(mLayoutToggleReceiver);
+            mLayoutReceiverRegistered = false;
+        }
+    }
+
+    private void applyArdaLauncherLayout() {
+        if (mLauncherRoot == null || mMapsCard == null) {
+            return;
+        }
+
+        ConstraintSet constraints = new ConstraintSet();
+        constraints.clone(mLauncherRoot);
+        int margin = getResources().getDimensionPixelSize(R.dimen.main_screen_widget_margin);
+
+        if (mMapFullscreen) {
+            if (mTopCard != null) {
+                constraints.setVisibility(R.id.top_card, View.GONE);
+            }
+            if (mBottomCard != null) {
+                constraints.setVisibility(R.id.bottom_card, View.GONE);
+            }
+            constraints.clear(R.id.maps_card, ConstraintSet.LEFT);
+            constraints.clear(R.id.maps_card, ConstraintSet.RIGHT);
+            constraints.clear(R.id.maps_card, ConstraintSet.TOP);
+            constraints.clear(R.id.maps_card, ConstraintSet.BOTTOM);
+            constraints.connect(
+                    R.id.maps_card, ConstraintSet.LEFT,
+                    ConstraintSet.PARENT_ID, ConstraintSet.LEFT);
+            constraints.connect(
+                    R.id.maps_card, ConstraintSet.RIGHT,
+                    ConstraintSet.PARENT_ID, ConstraintSet.RIGHT);
+            constraints.connect(
+                    R.id.maps_card, ConstraintSet.TOP,
+                    ConstraintSet.PARENT_ID, ConstraintSet.TOP);
+            constraints.connect(
+                    R.id.maps_card, ConstraintSet.BOTTOM,
+                    ConstraintSet.PARENT_ID, ConstraintSet.BOTTOM);
+            setHorizontalMargins(constraints, R.id.maps_card, margin, margin);
+            constraints.setMargin(R.id.maps_card, ConstraintSet.TOP, margin);
+            constraints.setMargin(R.id.maps_card, ConstraintSet.BOTTOM, margin);
+            constraints.applyTo(mLauncherRoot);
+            return;
+        }
+
+        if (mTopCard != null) {
+            constraints.setVisibility(R.id.top_card, View.VISIBLE);
+        }
+        if (mBottomCard != null) {
+            constraints.setVisibility(R.id.bottom_card, View.VISIBLE);
+        }
+
+        View guideline = findViewById(R.id.vertical_barrier);
+        if (guideline == null) {
+            constraints.applyTo(mLauncherRoot);
+            return;
+        }
+
+        boolean mapOnRight = Settings.Global.getInt(
+                getContentResolver(), SETTING_MAP_ON_RIGHT, 1) != 0;
+        int mapWidthPercent = Settings.Global.getInt(
+                getContentResolver(),
+                SETTING_MAP_WIDTH_PERCENT,
+                DEFAULT_MAP_WIDTH_PERCENT);
+        mapWidthPercent = Math.max(
+                MIN_MAP_WIDTH_PERCENT,
+                Math.min(MAX_MAP_WIDTH_PERCENT, mapWidthPercent));
+        float mapFraction = mapWidthPercent / 100f;
+        constraints.setGuidelinePercent(
+                R.id.vertical_barrier,
+                mapOnRight ? 1f - mapFraction : mapFraction);
+
+        clearHorizontalConstraints(constraints, R.id.top_card);
+        clearHorizontalConstraints(constraints, R.id.bottom_card);
+        clearHorizontalConstraints(constraints, R.id.maps_card);
+
+        if (mapOnRight) {
+            connectBetweenParentAndGuideline(
+                    constraints, R.id.top_card, true, R.id.vertical_barrier);
+            connectBetweenParentAndGuideline(
+                    constraints, R.id.bottom_card, true, R.id.vertical_barrier);
+            connectBetweenGuidelineAndParent(
+                    constraints, R.id.maps_card, R.id.vertical_barrier, true);
+            setHorizontalMargins(constraints, R.id.top_card, margin, 0);
+            setHorizontalMargins(constraints, R.id.bottom_card, margin, 0);
+            setHorizontalMargins(constraints, R.id.maps_card, margin, margin);
+        } else {
+            connectBetweenParentAndGuideline(
+                    constraints, R.id.maps_card, true, R.id.vertical_barrier);
+            connectBetweenGuidelineAndParent(
+                    constraints, R.id.top_card, R.id.vertical_barrier, true);
+            connectBetweenGuidelineAndParent(
+                    constraints, R.id.bottom_card, R.id.vertical_barrier, true);
+            setHorizontalMargins(constraints, R.id.maps_card, margin, margin);
+            setHorizontalMargins(constraints, R.id.top_card, 0, margin);
+            setHorizontalMargins(constraints, R.id.bottom_card, 0, margin);
+        }
+
+        constraints.setMargin(R.id.maps_card, ConstraintSet.TOP, 0);
+        constraints.setMargin(R.id.maps_card, ConstraintSet.BOTTOM, 0);
+        constraints.applyTo(mLauncherRoot);
+        Log.i(TAG, "ARDA_LAUNCHER_LAYOUT mapOnRight=" + mapOnRight
+                + " mapWidthPercent=" + mapWidthPercent);
+    }
+
+    private static void clearHorizontalConstraints(ConstraintSet constraints, int viewId) {
+        constraints.clear(viewId, ConstraintSet.LEFT);
+        constraints.clear(viewId, ConstraintSet.RIGHT);
+        constraints.clear(viewId, ConstraintSet.START);
+        constraints.clear(viewId, ConstraintSet.END);
+    }
+
+    private static void connectBetweenParentAndGuideline(
+            ConstraintSet constraints, int viewId, boolean parentOnLeft, int guidelineId) {
+        if (!parentOnLeft) {
+            throw new IllegalArgumentException("Only LTR launcher layouts are supported");
+        }
+        constraints.connect(
+                viewId, ConstraintSet.LEFT,
+                ConstraintSet.PARENT_ID, ConstraintSet.LEFT);
+        constraints.connect(
+                viewId, ConstraintSet.RIGHT,
+                guidelineId, ConstraintSet.LEFT);
+    }
+
+    private static void connectBetweenGuidelineAndParent(
+            ConstraintSet constraints, int viewId, int guidelineId, boolean parentOnRight) {
+        if (!parentOnRight) {
+            throw new IllegalArgumentException("Only LTR launcher layouts are supported");
+        }
+        constraints.connect(
+                viewId, ConstraintSet.LEFT,
+                guidelineId, ConstraintSet.RIGHT);
+        constraints.connect(
+                viewId, ConstraintSet.RIGHT,
+                ConstraintSet.PARENT_ID, ConstraintSet.RIGHT);
+    }
+
+    private static void setHorizontalMargins(
+            ConstraintSet constraints, int viewId, int left, int right) {
+        constraints.setMargin(viewId, ConstraintSet.LEFT, left);
+        constraints.setMargin(viewId, ConstraintSet.RIGHT, right);
     }
 
     private void unregisterTosContentObserver() {
