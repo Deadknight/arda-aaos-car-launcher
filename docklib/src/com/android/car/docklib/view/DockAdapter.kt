@@ -23,6 +23,7 @@ import android.util.Log
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.android.car.docklib.DockInterface
@@ -54,6 +55,21 @@ class DockAdapter(private val dockController: DockInterface, private val userCon
                 R.layout.dock_app_item_view, // resource
                 parent,
                 false // attachToRoot
+        )
+        val isVertical =
+            ((parent as? RecyclerView)?.layoutManager as? LinearLayoutManager)
+                ?.orientation == LinearLayoutManager.VERTICAL
+        view.layoutParams = RecyclerView.LayoutParams(
+            if (isVertical) {
+                ViewGroup.LayoutParams.MATCH_PARENT
+            } else {
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            },
+            if (isVertical) {
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            } else {
+                ViewGroup.LayoutParams.MATCH_PARENT
+            },
         )
         return DockItemViewHolder(
             dockController,

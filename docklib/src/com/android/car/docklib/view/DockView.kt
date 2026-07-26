@@ -19,6 +19,7 @@ package com.android.car.docklib.view
 import android.content.Context
 import android.util.AttributeSet
 import android.widget.FrameLayout
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.android.car.docklib.R
 
@@ -32,10 +33,26 @@ constructor(
 ) : FrameLayout(context, attrs, defStyleAttr, defStyleRes) {
 
     private val recyclerView: RecyclerView
+    private val dockOrientation: Int
 
     init {
+        dockOrientation = attrs?.getAttributeIntValue(
+            "http://schemas.android.com/apk/res/android",
+            "orientation",
+            LinearLayoutManager.HORIZONTAL,
+        ) ?: LinearLayoutManager.HORIZONTAL
+
         inflate(context, R.layout.dock_view, this)
         recyclerView = requireViewById(R.id.recycler_view)
+        recyclerView.layoutManager = LinearLayoutManager(
+            context,
+            if (dockOrientation == LinearLayoutManager.VERTICAL) {
+                LinearLayoutManager.VERTICAL
+            } else {
+                LinearLayoutManager.HORIZONTAL
+            },
+            false,
+        )
     }
 
     fun getAdapter() = recyclerView.adapter as DockAdapter
