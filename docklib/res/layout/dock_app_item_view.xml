@@ -15,7 +15,11 @@
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/dock_item_container"
-    style="@style/ItemContainer">
+    style="@style/ItemContainer"
+    android:layout_marginStart="0dp"
+    android:layout_marginEnd="0dp"
+    android:layout_marginTop="5dp"
+    android:layout_marginBottom="5dp">
 
     <com.google.android.material.imageview.ShapeableImageView
         android:id="@+id/dock_app_icon"
