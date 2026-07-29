@@ -81,6 +81,7 @@
     <uses-permission android:name="android.car.permission.CAR_MONITOR_CLUSTER_NAVIGATION_STATE"/>
     <!-- Permission to read notifications -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.BIND_APPWIDGET"/>
 
     <!-- To connect to media browser services in other apps, media browser clients
     that target Android 11 need to add the following in their manifest -->
@@ -129,6 +130,25 @@
                 <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".ArdaWidgetDrawerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.android.car.carlauncher.action.TOGGLE_WIDGET_DRAWER"/>
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".ArdaNotificationListenerService"
+            android:label="@string/app_title"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
+
         <service
             android:name=".recents.CarQuickStepService"
             android:permission="android.permission.STATUS_BAR_SERVICE"

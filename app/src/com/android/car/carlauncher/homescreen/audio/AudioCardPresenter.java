@@ -16,7 +16,7 @@
 
 package com.android.car.carlauncher.homescreen.audio;
 
-import com.android.car.carlauncher.Flags;
+import com.android.car.carlauncher.ArdaMediaUiConfig;
 import com.android.car.carlauncher.homescreen.CardPresenter;
 import com.android.car.carlauncher.homescreen.HomeCardFragment;
 import com.android.car.carlauncher.homescreen.HomeCardInterface;
@@ -44,7 +44,7 @@ public class AudioCardPresenter extends CardPresenter {
                 @Override
                 public void onViewCreated() {
                     mDialerPresenter.setView(mFragment.getInCallFragment());
-                    if (!Flags.mediaCardFullscreen()) {
+                    if (!ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
                         mMediaPresenter.setView(mFragment.getMediaFragment());
                     }
                 }
@@ -61,12 +61,12 @@ public class AudioCardPresenter extends CardPresenter {
 
         mDialerPresenter.setOnInCallStateChangeListener(hasActiveCall -> {
             if (hasActiveCall) {
-                if (!Flags.mediaCardFullscreen()) {
+                if (!ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
                     mMediaPresenter.setShowMedia(false);
                 }
                 mFragment.showInCallCard();
             } else {
-                if (!Flags.mediaCardFullscreen()) {
+                if (!ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
                     mMediaPresenter.setShowMedia(true);
                 }
                 mFragment.showMediaCard();
@@ -83,7 +83,7 @@ public class AudioCardPresenter extends CardPresenter {
     /** Sets the model for this presenter. */
     public void setModel(AudioCardModel viewModel) {
         mDialerPresenter.setModel(viewModel.getInCallViewModel());
-        if (!Flags.mediaCardFullscreen()) {
+        if (!ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
             mMediaPresenter.setModel(viewModel.getMediaViewModel());
         }
     }

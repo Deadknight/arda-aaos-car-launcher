@@ -65,4 +65,19 @@
     <!-- MapTos strings -->
     <string name="map_tos_review_button_text">Maps is disabled. Terms of service not accepted</string>
     <string name="map_tos_review_button_distraction_optimized_text">Maps is disabled. Review after your drive.</string>
+
+    <!-- ARDA Phase 1 notification and widget drawer. -->
+    <string name="arda_widget_drawer_title">Widgets</string>
+    <string name="arda_widget_close">Close widgets</string>
+    <string name="arda_widget_page_indicator">%1$d / %2$d</string>
+    <string name="arda_widget_drawer_ready_title">Widget drawer ready</string>
+    <string name="arda_widget_drawer_ready_summary">%1$d external widget providers detected. Swipe vertically to browse.</string>
+    <string name="arda_widget_provider_detected">Provider detected: %1$s\nBinding and placement will be enabled in the next phase.</string>
+
+
+    <string name="arda_widget_no_providers_title">No widgets available</string>
+    <string name="arda_widget_no_providers_summary">Install an application that provides a home-screen widget.</string>
+    <string name="arda_widget_binding_unavailable">Widget binding is unavailable for this provider.</string>
+    <string name="arda_widget_render_failed">The widget could not be rendered.</string>
+
 </resources>

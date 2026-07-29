@@ -132,4 +132,20 @@
     <dimen name="media_card_history_item_thumbnail_size">32dp</dimen>
     <dimen name="media_card_view_header_icon_size">32dp</dimen>
     <dimen name="media_card_text_view_guideline_start">248dp</dimen>
+
+    <!-- ARDA Phase 1 media/notification/widget dimensions. -->
+    <dimen name="arda_notification_peek_height">92dp</dimen>
+    <dimen name="arda_notification_peek_margin">8dp</dimen>
+    <dimen name="arda_notification_peek_gap">8dp</dimen>
+    <dimen name="arda_notification_peek_offset">18dp</dimen>
+    <dimen name="arda_widget_drawer_width">320dp</dimen>
+    <dimen name="arda_widget_drawer_margin">8dp</dimen>
+    <dimen name="arda_widget_edge_swipe_width">28dp</dimen>
+    <dimen name="arda_widget_swipe_threshold">72dp</dimen>
+    <dimen name="arda_widget_page_dot_size">5dp</dimen>
+    <dimen name="arda_widget_page_dot_active_size">8dp</dimen>
+    <dimen name="arda_widget_page_dot_gap">5dp</dimen>
+    <dimen name="arda_widget_page_indicator_width">16dp</dimen>
+    <dimen name="arda_widget_page_indicator_margin_end">7dp</dimen>
+
 </resources>

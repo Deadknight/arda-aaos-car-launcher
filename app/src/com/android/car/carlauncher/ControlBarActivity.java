@@ -95,7 +95,7 @@ public class ControlBarActivity extends FragmentActivity {
                     long reflectionStartTime = System.currentTimeMillis();
                     HomeCardModule cardModule = (HomeCardModule)
                             Class.forName(providerClassName).newInstance();
-                    if (Flags.mediaCardFullscreen()) {
+                    if (ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
                         if (cardModule.getCardResId() == R.id.top_card) {
                             findViewById(R.id.top_card).setVisibility(View.GONE);
                         }

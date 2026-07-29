@@ -40,7 +40,7 @@ import androidx.fragment.app.FragmentActivity;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.android.car.apps.common.BitmapUtils;
-import com.android.car.carlauncher.Flags;
+import com.android.car.carlauncher.ArdaMediaUiConfig;
 import com.android.car.carlauncher.MediaSessionUtils;
 import com.android.car.carlauncher.R;
 import com.android.car.carlauncher.homescreen.HomeCardFragment;
@@ -133,7 +133,7 @@ public class MediaCardFragment extends HomeCardFragment {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (!Flags.mediaCardFullscreen()) {
+        if (!ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
             mBlurRadius = getResources().getFloat(R.dimen.card_background_image_blur_radius);
             mDefaultCardBackgroundImage = new CardContent.CardBackgroundImage(
                     getContext().getDrawable(R.drawable.default_audio_background),
@@ -151,7 +151,7 @@ public class MediaCardFragment extends HomeCardFragment {
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
             Bundle savedInstanceState) {
-        if (!Flags.mediaCardFullscreen()) {
+        if (!ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
             return super.onCreateView(inflater, container, savedInstanceState);
         } else {
             return inflater.inflate(R.layout.media_card_fullscreen, container, false);
@@ -160,7 +160,7 @@ public class MediaCardFragment extends HomeCardFragment {
 
     @Override
     public void onViewCreated(View view, Bundle savedInstanceState) {
-        if (!Flags.mediaCardFullscreen()) {
+        if (!ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
             super.onViewCreated(view, savedInstanceState);
             getRootView().addOnLayoutChangeListener(mOnRootLayoutChangeListener);
         } else {

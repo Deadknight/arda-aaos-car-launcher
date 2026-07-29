@@ -36,10 +36,14 @@ import android.content.res.Configuration;
 import android.database.ContentObserver;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.UserHandle;
 import android.os.UserManager;
 import android.provider.Settings;
+import android.transition.AutoTransition;
+import android.transition.TransitionManager;
 import android.util.Log;
 import android.view.Display;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -83,14 +87,38 @@ public class CarLauncher extends FragmentActivity {
 
     private static final String ACTION_TOGGLE_MAP_FULLSCREEN =
             "com.android.car.carlauncher.action.TOGGLE_MAP_FULLSCREEN";
+    private static final String ACTION_TOGGLE_WIDGET_DRAWER =
+            ArdaWidgetDrawerController.ACTION_TOGGLE_WIDGET_DRAWER;
+    private static final String ACTION_WIDGET_DRAWER_STATE =
+            "com.android.systemui.action.ARDA_WIDGET_DRAWER_STATE";
+    private static final String EXTRA_WIDGET_DRAWER_OPEN = "open";
+    private static final String SYSTEMUI_PACKAGE = "com.android.systemui";
     private static final String CONTROL_LAYOUT_PERMISSION =
             "com.android.car.carlauncher.permission.CONTROL_LAYOUT";
     private static final String SETTING_MAP_ON_RIGHT = "arda_launcher_map_on_right";
-    private static final String SETTING_MAP_WIDTH_PERCENT =
+    // Legacy two-panel key retained for backward compatibility.
+    private static final String SETTING_LEGACY_MAP_WIDTH_PERCENT =
             "arda_launcher_map_width_percent";
-    private static final int DEFAULT_MAP_WIDTH_PERCENT = 67;
-    private static final int MIN_MAP_WIDTH_PERCENT = 45;
-    private static final int MAX_MAP_WIDTH_PERCENT = 80;
+    private static final String SETTING_TWO_PANEL_MAP_WIDTH_PERCENT =
+            "arda_launcher_two_panel_map_width_percent";
+    private static final String SETTING_THREE_PANEL_MAP_WIDTH_PERCENT =
+            "arda_launcher_three_panel_map_width_percent";
+    private static final String SETTING_THREE_PANEL_MEDIA_WIDTH_PERCENT =
+            "arda_launcher_three_panel_media_width_percent";
+
+    private static final int DEFAULT_TWO_PANEL_MAP_WIDTH_PERCENT = 67;
+    private static final int DEFAULT_THREE_PANEL_MAP_WIDTH_PERCENT = 52;
+    private static final int DEFAULT_THREE_PANEL_MEDIA_WIDTH_PERCENT = 24;
+
+    private static final int MIN_TWO_PANEL_MAP_WIDTH_PERCENT = 40;
+    private static final int MAX_TWO_PANEL_MAP_WIDTH_PERCENT = 80;
+    private static final int MIN_THREE_PANEL_MAP_WIDTH_PERCENT = 35;
+    private static final int MAX_THREE_PANEL_MAP_WIDTH_PERCENT = 70;
+    private static final int MIN_THREE_PANEL_MEDIA_WIDTH_PERCENT = 15;
+    private static final int MAX_THREE_PANEL_MEDIA_WIDTH_PERCENT = 40;
+    private static final int MIN_THREE_PANEL_WIDGET_WIDTH_PERCENT = 15;
+
+    private static final long WIDGET_LAYOUT_ANIMATION_MS = 240L;
 
     private ActivityManager mActivityManager;
     private Car mCar;
@@ -107,6 +135,13 @@ public class CarLauncher extends FragmentActivity {
     private boolean mMapFullscreen;
     private boolean mLayoutReceiverRegistered;
     private ContentObserver mLauncherLayoutObserver;
+    private View mNotificationPeekView;
+    private boolean mNotificationPeekVisible;
+    private ArdaNotificationPeekController mNotificationPeekController;
+    private ArdaWidgetDrawerController mWidgetDrawerController;
+    private View mWidgetDrawerView;
+    private boolean mWidgetDrawerOpen;
+    private boolean mNotificationReceiverRegistered;
 
     private final BroadcastReceiver mLayoutToggleReceiver = new BroadcastReceiver() {
         @Override
@@ -115,9 +150,28 @@ public class CarLauncher extends FragmentActivity {
                 return;
             }
             mMapFullscreen = !mMapFullscreen;
+            if (mMapFullscreen) {
+                if (mWidgetDrawerController != null) {
+                    mWidgetDrawerController.close(false);
+                }
+                if (mNotificationPeekController != null) {
+                    mNotificationPeekController.hide(false);
+                }
+            }
             Log.i(TAG, "ARDA_LAUNCHER_MAP_FULLSCREEN=" + mMapFullscreen
                     + " ARDA_LAUNCHER_HOME_CARDS_HIDDEN=" + mMapFullscreen);
             applyArdaLauncherLayout();
+        }
+    };
+
+    private final BroadcastReceiver mNotificationPeekReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!ArdaNotificationListenerService.ACTION_NOTIFICATION_PEEK.equals(
+                    intent.getAction()) || mNotificationPeekController == null) {
+                return;
+            }
+            mNotificationPeekController.show(intent);
         }
     };
 
@@ -201,6 +255,7 @@ public class CarLauncher extends FragmentActivity {
         } else {
             setContentView(R.layout.car_launcher);
             initializeArdaLauncherLayoutControls();
+            initializeArdaPhase1Ui(getIntent());
             // Passenger displays do not require TaskView Embedding
             if (!isPassengerDisplay) {
                 mUseSmallCanvasOptimizedMap =
@@ -268,6 +323,22 @@ public class CarLauncher extends FragmentActivity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (mWidgetDrawerController != null
+                && mLauncherRoot != null
+                && mWidgetDrawerController.onTouchEvent(event, mLauncherRoot.getWidth())) {
+            return true;
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
 
@@ -278,6 +349,7 @@ public class CarLauncher extends FragmentActivity {
     protected void onDestroy() {
         super.onDestroy();
 
+        releaseArdaPhase1Ui();
         releaseArdaLauncherLayoutControls();
 
         if (isDewdActive()) {
@@ -288,6 +360,64 @@ public class CarLauncher extends FragmentActivity {
         TaskStackChangeListeners.getInstance().unregisterTaskStackListener(mTaskStackListener);
         unregisterTosContentObserver();
         release();
+    }
+
+    private void initializeArdaPhase1Ui(Intent launchIntent) {
+        mNotificationPeekView = findViewById(R.id.arda_notification_peek);
+        mWidgetDrawerView = findViewById(R.id.arda_widget_overlay);
+        if (mLauncherRoot == null || mNotificationPeekView == null || mWidgetDrawerView == null) {
+            return;
+        }
+
+        mNotificationPeekController = new ArdaNotificationPeekController(
+                this,
+                mNotificationPeekView,
+                visible -> {
+                    mNotificationPeekVisible = visible;
+                    applyArdaLauncherLayout();
+                });
+        mWidgetDrawerController = new ArdaWidgetDrawerController(
+                this,
+                (open, animate) -> {
+                    if (open) {
+                        mMapFullscreen = false;
+                    }
+                    mWidgetDrawerOpen = open;
+                    if (animate && mLauncherRoot != null) {
+                        AutoTransition transition = new AutoTransition();
+                        transition.setDuration(WIDGET_LAYOUT_ANIMATION_MS);
+                        TransitionManager.beginDelayedTransition(mLauncherRoot, transition);
+                    }
+                    applyArdaLauncherLayout();
+                    publishArdaWidgetDrawerState(open);
+                });
+        ArdaWidgetDrawerBridge.attach(mWidgetDrawerController);
+        publishArdaWidgetDrawerState(false);
+
+        registerReceiver(
+                mNotificationPeekReceiver,
+                new IntentFilter(ArdaNotificationListenerService.ACTION_NOTIFICATION_PEEK),
+                Context.RECEIVER_EXPORTED);
+        mNotificationReceiverRegistered = true;
+    }
+
+    private void releaseArdaPhase1Ui() {
+        if (mNotificationReceiverRegistered) {
+            unregisterReceiver(mNotificationPeekReceiver);
+            mNotificationReceiverRegistered = false;
+        }
+        if (mNotificationPeekController != null) {
+            mNotificationPeekController.destroy();
+            mNotificationPeekController = null;
+        }
+        if (mWidgetDrawerController != null) {
+            publishArdaWidgetDrawerState(false);
+            ArdaWidgetDrawerBridge.detach(mWidgetDrawerController);
+            mWidgetDrawerController.destroy();
+            mWidgetDrawerController = null;
+        }
+        mWidgetDrawerView = null;
+        mWidgetDrawerOpen = false;
     }
 
     private void initializeArdaLauncherLayoutControls() {
@@ -319,7 +449,19 @@ public class CarLauncher extends FragmentActivity {
                 false,
                 mLauncherLayoutObserver);
         getContentResolver().registerContentObserver(
-                Settings.Global.getUriFor(SETTING_MAP_WIDTH_PERCENT),
+                Settings.Global.getUriFor(SETTING_LEGACY_MAP_WIDTH_PERCENT),
+                false,
+                mLauncherLayoutObserver);
+        getContentResolver().registerContentObserver(
+                Settings.Global.getUriFor(SETTING_TWO_PANEL_MAP_WIDTH_PERCENT),
+                false,
+                mLauncherLayoutObserver);
+        getContentResolver().registerContentObserver(
+                Settings.Global.getUriFor(SETTING_THREE_PANEL_MAP_WIDTH_PERCENT),
+                false,
+                mLauncherLayoutObserver);
+        getContentResolver().registerContentObserver(
+                Settings.Global.getUriFor(SETTING_THREE_PANEL_MEDIA_WIDTH_PERCENT),
                 false,
                 mLauncherLayoutObserver);
 
@@ -353,6 +495,12 @@ public class CarLauncher extends FragmentActivity {
             if (mBottomCard != null) {
                 constraints.setVisibility(R.id.bottom_card, View.GONE);
             }
+            if (mNotificationPeekView != null) {
+                constraints.setVisibility(R.id.arda_notification_peek, View.GONE);
+            }
+            if (mWidgetDrawerView != null) {
+                constraints.setVisibility(R.id.arda_widget_overlay, View.GONE);
+            }
             constraints.clear(R.id.maps_card, ConstraintSet.LEFT);
             constraints.clear(R.id.maps_card, ConstraintSet.RIGHT);
             constraints.clear(R.id.maps_card, ConstraintSet.TOP);
@@ -376,11 +524,45 @@ public class CarLauncher extends FragmentActivity {
             return;
         }
 
+        boolean fullscreenMedia = ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD;
         if (mTopCard != null) {
-            constraints.setVisibility(R.id.top_card, View.VISIBLE);
+            constraints.setVisibility(
+                    R.id.top_card, fullscreenMedia ? View.GONE : View.VISIBLE);
+        }
+        if (mNotificationPeekView != null) {
+            constraints.setVisibility(
+                    R.id.arda_notification_peek,
+                    mNotificationPeekVisible ? View.VISIBLE : View.GONE);
+            constraints.clear(R.id.arda_notification_peek, ConstraintSet.TOP);
+            constraints.connect(
+                    R.id.arda_notification_peek, ConstraintSet.TOP,
+                    ConstraintSet.PARENT_ID, ConstraintSet.TOP);
         }
         if (mBottomCard != null) {
             constraints.setVisibility(R.id.bottom_card, View.VISIBLE);
+            if (fullscreenMedia) {
+                constraints.clear(R.id.bottom_card, ConstraintSet.TOP);
+                constraints.clear(R.id.bottom_card, ConstraintSet.BOTTOM);
+                constraints.connect(
+                        R.id.bottom_card, ConstraintSet.TOP,
+                        mNotificationPeekVisible
+                                ? R.id.arda_notification_peek
+                                : ConstraintSet.PARENT_ID,
+                        mNotificationPeekVisible
+                                ? ConstraintSet.BOTTOM
+                                : ConstraintSet.TOP);
+                constraints.connect(
+                        R.id.bottom_card, ConstraintSet.BOTTOM,
+                        ConstraintSet.PARENT_ID, ConstraintSet.BOTTOM);
+                constraints.setMargin(
+                        R.id.bottom_card,
+                        ConstraintSet.TOP,
+                        mNotificationPeekVisible
+                                ? getResources().getDimensionPixelSize(
+                                        R.dimen.arda_notification_peek_gap)
+                                : 0);
+                constraints.setMargin(R.id.bottom_card, ConstraintSet.BOTTOM, 0);
+            }
         }
 
         View guideline = findViewById(R.id.vertical_barrier);
@@ -389,15 +571,103 @@ public class CarLauncher extends FragmentActivity {
             return;
         }
 
+        int threePanelMapPercent = getClampedGlobalInt(
+                SETTING_THREE_PANEL_MAP_WIDTH_PERCENT,
+                DEFAULT_THREE_PANEL_MAP_WIDTH_PERCENT,
+                MIN_THREE_PANEL_MAP_WIDTH_PERCENT,
+                MAX_THREE_PANEL_MAP_WIDTH_PERCENT);
+        int threePanelMediaPercent = getClampedGlobalInt(
+                SETTING_THREE_PANEL_MEDIA_WIDTH_PERCENT,
+                DEFAULT_THREE_PANEL_MEDIA_WIDTH_PERCENT,
+                MIN_THREE_PANEL_MEDIA_WIDTH_PERCENT,
+                MAX_THREE_PANEL_MEDIA_WIDTH_PERCENT);
+        threePanelMediaPercent = Math.min(
+                threePanelMediaPercent,
+                100 - threePanelMapPercent - MIN_THREE_PANEL_WIDGET_WIDTH_PERCENT);
+        int threePanelWidgetPercent =
+                100 - threePanelMapPercent - threePanelMediaPercent;
+        float threePanelMapEnd = threePanelMapPercent / 100f;
+        float threePanelMediaEnd =
+                (threePanelMapPercent + threePanelMediaPercent) / 100f;
+
+        View widgetGuideline = findViewById(R.id.arda_widget_barrier);
+        if (widgetGuideline != null) {
+            constraints.setGuidelinePercent(
+                    R.id.arda_widget_barrier,
+                    mWidgetDrawerOpen ? threePanelMediaEnd : 1f);
+        }
+
+        if (mWidgetDrawerView != null) {
+            constraints.setVisibility(
+                    R.id.arda_widget_overlay,
+                    mWidgetDrawerOpen ? View.VISIBLE : View.GONE);
+        }
+
+        if (mWidgetDrawerOpen && widgetGuideline != null) {
+            constraints.setGuidelinePercent(
+                    R.id.vertical_barrier, threePanelMapEnd);
+
+            clearHorizontalConstraints(constraints, R.id.maps_card);
+            clearHorizontalConstraints(constraints, R.id.top_card);
+            clearHorizontalConstraints(constraints, R.id.bottom_card);
+            clearHorizontalConstraints(constraints, R.id.arda_widget_overlay);
+            if (mNotificationPeekView != null) {
+                clearHorizontalConstraints(constraints, R.id.arda_notification_peek);
+            }
+
+            connectBetweenParentAndGuideline(
+                    constraints, R.id.maps_card, true, R.id.vertical_barrier);
+            connectBetweenGuidelines(
+                    constraints, R.id.top_card, R.id.vertical_barrier,
+                    R.id.arda_widget_barrier);
+            connectBetweenGuidelines(
+                    constraints, R.id.bottom_card, R.id.vertical_barrier,
+                    R.id.arda_widget_barrier);
+            if (mNotificationPeekView != null) {
+                connectBetweenGuidelines(
+                        constraints, R.id.arda_notification_peek,
+                        R.id.vertical_barrier, R.id.arda_widget_barrier);
+            }
+            connectBetweenGuidelineAndParent(
+                    constraints, R.id.arda_widget_overlay,
+                    R.id.arda_widget_barrier, true);
+
+            setHorizontalMargins(constraints, R.id.maps_card, margin, 0);
+            setHorizontalMargins(constraints, R.id.top_card, margin, 0);
+            setHorizontalMargins(constraints, R.id.bottom_card, margin, 0);
+            if (mNotificationPeekView != null) {
+                setHorizontalMargins(
+                        constraints, R.id.arda_notification_peek, margin, 0);
+            }
+            setHorizontalMargins(constraints, R.id.arda_widget_overlay, 0, 0);
+
+            constraints.setMargin(R.id.maps_card, ConstraintSet.TOP, 0);
+            constraints.setMargin(R.id.maps_card, ConstraintSet.BOTTOM, 0);
+            constraints.applyTo(mLauncherRoot);
+            Log.i(TAG, "ARDA_LAUNCHER_LAYOUT mode=map-media-widget"
+                    + " mapPercent=" + threePanelMapPercent
+                    + " mediaPercent=" + threePanelMediaPercent
+                    + " widgetPercent=" + threePanelWidgetPercent
+                    + " mapEnd=" + threePanelMapEnd
+                    + " mediaEnd=" + threePanelMediaEnd
+                    + " notificationPeek=" + mNotificationPeekVisible
+                    + " widgetOpen=" + mWidgetDrawerOpen);
+            return;
+        }
+
         boolean mapOnRight = Settings.Global.getInt(
                 getContentResolver(), SETTING_MAP_ON_RIGHT, 1) != 0;
+        int legacyMapWidthPercent = Settings.Global.getInt(
+                getContentResolver(),
+                SETTING_LEGACY_MAP_WIDTH_PERCENT,
+                DEFAULT_TWO_PANEL_MAP_WIDTH_PERCENT);
         int mapWidthPercent = Settings.Global.getInt(
                 getContentResolver(),
-                SETTING_MAP_WIDTH_PERCENT,
-                DEFAULT_MAP_WIDTH_PERCENT);
+                SETTING_TWO_PANEL_MAP_WIDTH_PERCENT,
+                legacyMapWidthPercent);
         mapWidthPercent = Math.max(
-                MIN_MAP_WIDTH_PERCENT,
-                Math.min(MAX_MAP_WIDTH_PERCENT, mapWidthPercent));
+                MIN_TWO_PANEL_MAP_WIDTH_PERCENT,
+                Math.min(MAX_TWO_PANEL_MAP_WIDTH_PERCENT, mapWidthPercent));
         float mapFraction = mapWidthPercent / 100f;
         constraints.setGuidelinePercent(
                 R.id.vertical_barrier,
@@ -406,16 +676,27 @@ public class CarLauncher extends FragmentActivity {
         clearHorizontalConstraints(constraints, R.id.top_card);
         clearHorizontalConstraints(constraints, R.id.bottom_card);
         clearHorizontalConstraints(constraints, R.id.maps_card);
+        if (mNotificationPeekView != null) {
+            clearHorizontalConstraints(constraints, R.id.arda_notification_peek);
+        }
 
         if (mapOnRight) {
             connectBetweenParentAndGuideline(
                     constraints, R.id.top_card, true, R.id.vertical_barrier);
             connectBetweenParentAndGuideline(
                     constraints, R.id.bottom_card, true, R.id.vertical_barrier);
+            if (mNotificationPeekView != null) {
+                connectBetweenParentAndGuideline(
+                        constraints, R.id.arda_notification_peek, true, R.id.vertical_barrier);
+            }
             connectBetweenGuidelineAndParent(
                     constraints, R.id.maps_card, R.id.vertical_barrier, true);
             setHorizontalMargins(constraints, R.id.top_card, margin, 0);
             setHorizontalMargins(constraints, R.id.bottom_card, margin, 0);
+            if (mNotificationPeekView != null) {
+                setHorizontalMargins(
+                        constraints, R.id.arda_notification_peek, margin, 0);
+            }
             setHorizontalMargins(constraints, R.id.maps_card, margin, margin);
         } else {
             connectBetweenParentAndGuideline(
@@ -424,16 +705,41 @@ public class CarLauncher extends FragmentActivity {
                     constraints, R.id.top_card, R.id.vertical_barrier, true);
             connectBetweenGuidelineAndParent(
                     constraints, R.id.bottom_card, R.id.vertical_barrier, true);
+            if (mNotificationPeekView != null) {
+                connectBetweenGuidelineAndParent(
+                        constraints, R.id.arda_notification_peek,
+                        R.id.vertical_barrier, true);
+            }
             setHorizontalMargins(constraints, R.id.maps_card, margin, margin);
             setHorizontalMargins(constraints, R.id.top_card, 0, margin);
             setHorizontalMargins(constraints, R.id.bottom_card, 0, margin);
+            if (mNotificationPeekView != null) {
+                setHorizontalMargins(
+                        constraints, R.id.arda_notification_peek, 0, margin);
+            }
         }
 
         constraints.setMargin(R.id.maps_card, ConstraintSet.TOP, 0);
         constraints.setMargin(R.id.maps_card, ConstraintSet.BOTTOM, 0);
         constraints.applyTo(mLauncherRoot);
         Log.i(TAG, "ARDA_LAUNCHER_LAYOUT mapOnRight=" + mapOnRight
-                + " mapWidthPercent=" + mapWidthPercent);
+                + " mapWidthPercent=" + mapWidthPercent
+                + " fullscreenMedia=" + fullscreenMedia
+                + " notificationPeek=" + mNotificationPeekVisible
+                + " widgetOpen=" + mWidgetDrawerOpen);
+    }
+
+    private void publishArdaWidgetDrawerState(boolean open) {
+        Intent stateIntent = new Intent(ACTION_WIDGET_DRAWER_STATE)
+                .setPackage(SYSTEMUI_PACKAGE)
+                .putExtra(EXTRA_WIDGET_DRAWER_OPEN, open);
+        try {
+            sendBroadcastAsUser(stateIntent, UserHandle.ALL, CONTROL_LAYOUT_PERMISSION);
+            Log.i(TAG, "ARDA_WIDGET_DRAWER_STATE published=" + open);
+        } catch (SecurityException e) {
+            Log.w(TAG, "Unable to publish widget drawer state to all users", e);
+            sendBroadcast(stateIntent, CONTROL_LAYOUT_PERMISSION);
+        }
     }
 
     private static void clearHorizontalConstraints(ConstraintSet constraints, int viewId) {
@@ -456,6 +762,17 @@ public class CarLauncher extends FragmentActivity {
                 guidelineId, ConstraintSet.LEFT);
     }
 
+    private static void connectBetweenGuidelines(
+            ConstraintSet constraints, int viewId, int leftGuidelineId,
+            int rightGuidelineId) {
+        constraints.connect(
+                viewId, ConstraintSet.LEFT,
+                leftGuidelineId, ConstraintSet.RIGHT);
+        constraints.connect(
+                viewId, ConstraintSet.RIGHT,
+                rightGuidelineId, ConstraintSet.LEFT);
+    }
+
     private static void connectBetweenGuidelineAndParent(
             ConstraintSet constraints, int viewId, int guidelineId, boolean parentOnRight) {
         if (!parentOnRight) {
@@ -473,6 +790,12 @@ public class CarLauncher extends FragmentActivity {
             ConstraintSet constraints, int viewId, int left, int right) {
         constraints.setMargin(viewId, ConstraintSet.LEFT, left);
         constraints.setMargin(viewId, ConstraintSet.RIGHT, right);
+    }
+
+    private int getClampedGlobalInt(
+            String key, int defaultValue, int minimumValue, int maximumValue) {
+        int value = Settings.Global.getInt(getContentResolver(), key, defaultValue);
+        return Math.max(minimumValue, Math.min(maximumValue, value));
     }
 
     private void unregisterTosContentObserver() {
@@ -525,7 +848,7 @@ public class CarLauncher extends FragmentActivity {
                     long reflectionStartTime = System.currentTimeMillis();
                     HomeCardModule cardModule = (HomeCardModule)
                             Class.forName(providerClassName).newInstance();
-                    if (Flags.mediaCardFullscreen()) {
+                    if (ArdaMediaUiConfig.FULLSCREEN_MEDIA_CARD) {
                         if (cardModule.getCardResId() == R.id.top_card) {
                             findViewById(R.id.top_card).setVisibility(View.GONE);
                         }
