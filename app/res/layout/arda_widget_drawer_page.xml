@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_margin="8dp"
+    app:cardBackgroundColor="?oemColorSurfaceContainerHigh"
+    app:cardCornerRadius="20dp"
+    app:cardElevation="0dp">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <FrameLayout
+            android:id="@+id/arda_widget_host_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipChildren="true"
+            android:clipToPadding="true"
+            android:padding="6dp"/>
+
+        <LinearLayout
+            android:id="@+id/arda_widget_placeholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="24dp">
+
+            <ImageView
+                android:id="@+id/arda_widget_page_icon"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:contentDescription="@null"
+                android:scaleType="centerInside"/>
+
+            <TextView
+                android:id="@+id/arda_widget_page_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:maxLines="2"
+                android:textAppearance="?oemTextAppearanceTitleLarge"
+                android:textColor="?oemColorOnSurface"/>
+
+            <TextView
+                android:id="@+id/arda_widget_page_summary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:maxLines="4"
+                android:textAppearance="?oemTextAppearanceBodyMedium"
+                android:textColor="?oemColorOnSurfaceVariant"/>
+        </LinearLayout>
+    </FrameLayout>
+</androidx.cardview.widget.CardView>

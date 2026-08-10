@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARDA landscape-only home spacing override. -->
+<resources>
+    <dimen name="main_screen_widget_margin">8dp</dimen>
+</resources>
