@@ -220,7 +220,8 @@ public class CarLauncher extends FragmentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        // ARDA_VISUAL_THEME_LAUNCHER_V1
+        ArdaLauncherBackgroundController.attach(this);
         if (DEBUG) {
             Log.d(TAG, "onCreate(" + getUserId() + ") displayId=" + getDisplayId());
         }
@@ -330,11 +331,8 @@ public class CarLauncher extends FragmentActivity {
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
-        if (mWidgetDrawerController != null
-                && mLauncherRoot != null
-                && mWidgetDrawerController.onTouchEvent(event, mLauncherRoot.getWidth())) {
-            return true;
-        }
+        // ARDA Phase 1G-B: the right-rail widget button is authoritative. Activity-level edge
+        // swipes must never steal horizontal gestures from the media page or Maps.
         return super.dispatchTouchEvent(event);
     }
 
