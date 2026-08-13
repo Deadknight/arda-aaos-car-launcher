@@ -21,23 +21,21 @@ import static com.android.car.media.common.ui.PlaybackCardControllerUtilities.sk
 import static com.android.car.media.common.ui.PlaybackCardControllerUtilities.skipForwardStandardActions;
 import static com.android.car.media.common.ui.PlaybackCardControllerUtilities.updatePlayButtonWithPlaybackState;
 
-import static java.lang.Integer.max;
-
 import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
-import android.view.animation.Animation;
-import android.view.animation.AnimationUtils;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import androidx.constraintlayout.motion.widget.MotionLayout;
+import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 
 import com.android.car.apps.common.util.ViewUtils;
@@ -57,14 +55,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class MediaCardController extends PlaybackCardController implements
+        /* ARDA_MEDIA_PHASE1H_REFERENCE_REWORK */
+        /* ARDA_MEDIA_PHASE1H1_RECYCLER_SWIPE_BRIDGE */
         MediaCardPanelViewPagerAdapter.ViewPagerQueueCreator,
         MediaCardPanelViewPagerAdapter.ViewPagerHistoryCreator {
 
-    private static final int SWIPE_MAX_OFF_PATH = 75;
-    private static final int SWIPE_THRESHOLD_VELOCITY = 200;
+    private static final String ARDA_PHASE1H5_MARKER =
+            "ARDA_MEDIA_PHASE1H5_STATIC_NOW_PLAYING";
 
     private final MediaLaunchRouter mMediaLaunchRouter = MediaLaunchRouter.getInstance();
-    private Resources mViewResources;
     private View mPanelHandlebar;
     private LinearLayout mPanel;
     private MotionLayout mMotionLayout;
@@ -76,6 +75,8 @@ public class MediaCardController extends PlaybackCardController implements
     private int mAlbumCoverVisibility;
     private int mSubtitleVisibility;
     private int mLogoVisibility;
+    private TextView mPlaybackTimeView;
+    private TextView mSecondaryPageTitle;
 
     private PlaybackQueueController mPlaybackQueueController;
     private PlaybackHistoryController mPlaybackHistoryController;
@@ -95,6 +96,7 @@ public class MediaCardController extends PlaybackCardController implements
         mPlaybackQueueController.setShowIconForActiveQueueItem(false);
         mPlaybackQueueController.setShowThumbnailForQueueItem(true);
         mPlaybackQueueController.setShowSubtitleForQueueItem(true);
+        installSecondaryRecyclerSwipeBridge(queueContainer, R.id.queue_list);
     }
 
     @Override
@@ -103,6 +105,7 @@ public class MediaCardController extends PlaybackCardController implements
                 mCardViewModel, historyContainer, R.layout.media_card_history_item,
                 R.layout.media_card_history_header_item, /* uxrConfigurationId */ 0);
         mPlaybackHistoryController.setupView();
+        installSecondaryRecyclerSwipeBridge(historyContainer, R.id.history_list);
     }
 
     /** Builder for {@link MediaCardController}. Overrides build() method to return
@@ -122,8 +125,6 @@ public class MediaCardController extends PlaybackCardController implements
         super(builder);
 
         mCardViewModel = (MediaCardFragment.MediaCardViewModel) mViewModel;
-        mViewResources = mView.getContext().getResources();
-
         mView.setOnClickListener(view -> {
             launchMediaAppOrClosePanel();
         });
@@ -133,7 +134,11 @@ public class MediaCardController extends PlaybackCardController implements
 
         mPager = mView.findViewById(R.id.view_pager);
         mPagerAdapter = new MediaCardPanelViewPagerAdapter(mView.getContext());
-        mPager.setAdapter(mPagerAdapter);
+        // ARDA_MEDIA_PHASE1H5_STATIC_NOW_PLAYING: keep the secondary controller object available
+        // for API compatibility, but do not attach its page while we focus on Now Playing.
+        mPager.setAdapter(null);
+        mPager.setUserInputEnabled(false);
+        mPager.setVisibility(View.GONE);
         mPagerAdapter.setQueueControllerProvider(this);
         mPagerAdapter.setHistoryControllerProvider(this);
         mPager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
@@ -144,77 +149,53 @@ public class MediaCardController extends PlaybackCardController implements
                 if (!mCardViewModel.getPanelExpanded()) {
                     return;
                 }
-                selectOverflow(position == getOverflowTabIndex());
-                selectQueue(position == getQueueTabIndex());
-                selectHistory(position == getHistoryTabIndex());
+                boolean hasQueue = getMediaHasQueue();
+                selectOverflow(false);
+                selectQueue(hasQueue);
+                selectHistory(!hasQueue);
             }
         });
 
         mMotionLayout = mView.findViewById(R.id.motion_layout);
+        // Phase 1H.4 keeps the normal card click path: tapping the compact Now Playing surface
+        // opens the active generic media host. No compact queue gesture is registered here.
+        mMotionLayout.setTag(ARDA_PHASE1H5_MARKER);
+        mMotionLayout.setOnClickListener(view -> launchMediaAppOrClosePanel());
 
         mPanel = mView.findViewById(R.id.button_panel_background);
         mPanelHandlebar = mView.findViewById(R.id.media_card_panel_handlebar);
 
         mSkipPrevButton = mView.findViewById(R.id.playback_action_id1);
         mSkipNextButton = mView.findViewById(R.id.playback_action_id2);
+        mPlaybackTimeView = mView.findViewById(R.id.playback_time);
+        mSecondaryPageTitle = mView.findViewById(
+                R.id.arda_media_secondary_page_title);
+        if (mSecondaryPageTitle != null) {
+            mSecondaryPageTitle.setVisibility(View.GONE);
+        }
 
-        Animation handlebarFadeOut = AnimationUtils.loadAnimation(mView.getContext(),
-                R.anim.media_card_panel_handlebar_fade_out);
-        Animation handlebarFadeIn = AnimationUtils.loadAnimation(mView.getContext(),
-                R.anim.media_card_panel_handlebar_fade_in);
-        mMotionLayout.addTransitionListener(new MotionLayout.TransitionListener() {
-            @Override
-            public void onTransitionStarted(MotionLayout motionLayout, int i, int i1) {
-                mPanelHandlebar.startAnimation(mCardViewModel.getPanelExpanded() ? handlebarFadeIn
-                        : handlebarFadeOut);
-            }
+        // ARDA_MEDIA_PHASE1H5_STATIC_NOW_PLAYING: the compact card no longer uses the
+        // queue MotionScene. Keeping transition callbacks here could restore stale end-state
+        // visibility, so the Now Playing surface is managed as a normal static layout.
 
-            @Override
-            public void onTransitionChange(MotionLayout motionLayout, int i, int i1, float v) {
-            }
-
-            @Override
-            public void onTransitionCompleted(MotionLayout motionLayout, int i) {
-                if (mCardViewModel.getPanelExpanded()) {
-                    mSkipPrevButton.setVisibility(View.GONE);
-                    mSkipNextButton.setVisibility(View.GONE);
-                    mLogo.setVisibility(View.GONE);
-                }
-            }
-
-            @Override
-            public void onTransitionTrigger(MotionLayout motionLayout, int i, boolean b, float v) {
-            }
-        });
-
-        GestureDetector mCloseGestureDetector = new GestureDetector(mView.getContext(),
-                new GestureDetector.SimpleOnGestureListener() {
-                    @Override
-                    public boolean onFling(MotionEvent event1, MotionEvent event2,
-                            float velocityX, float velocityY) {
-                        if (Math.abs(event1.getX() - event2.getX()) > SWIPE_MAX_OFF_PATH
-                                || Math.abs(velocityY) < SWIPE_THRESHOLD_VELOCITY) {
-                            // swipe was not vertical or was not fast enough
-                            return false;
-                        }
-                        boolean isInClosingDirection = velocityY > 0;
-                        if (isInClosingDirection) {
-                            animateClosePanel();
-                            return true;
-                        }
-                        return false;
-                    }
-                }
-        );
-        mPanelHandlebar.setOnClickListener((view) -> animateClosePanel());
-        mPanelHandlebar.setOnTouchListener((view, event) ->
-                mCloseGestureDetector.onTouchEvent(event));
+        if (mMotionLayout instanceof ArdaMediaSwipeLayout) {
+            // Queue/source page is temporarily disabled. A null listener makes the custom
+            // MotionLayout use normal Android touch dispatch without horizontal page capture.
+            ((ArdaMediaSwipeLayout) mMotionLayout).setPageSwipeListener(null);
+        }
+        mPanelHandlebar.setVisibility(View.GONE);
+        mPanelHandlebar.setOnClickListener(null);
 
         mHandler = new Handler(Looper.getMainLooper());
     }
 
     @Override
     protected void setupController() {
+        // A FragmentActivity-scoped MediaCardViewModel survives Launcher view recreation. If the
+        // previous card instance was left on Queue/Media Source, that stale expanded flag used to
+        // make the newly-created card start on the secondary page. Phase 1H.4 intentionally keeps
+        // the compact surface in Now Playing-only mode while its visual treatment is refined.
+        resetToNowPlayingOnControllerStart();
         super.setupController();
 
         mSkipPrevVisibility = mSkipPrevButton.getVisibility();
@@ -222,6 +203,72 @@ public class MediaCardController extends PlaybackCardController implements
         mAlbumCoverVisibility = mAlbumCover.getVisibility();
         mSubtitleVisibility = mSubtitle.getVisibility();
         mLogoVisibility = mLogo.getVisibility();
+
+        forceStaticNowPlayingVisible();
+        // Apply once more after MotionLayout has completed its first layout/restoration pass.
+        mMotionLayout.post(this::forceStaticNowPlayingVisible);
+    }
+
+    private void resetToNowPlayingOnControllerStart() {
+        mCardViewModel.setPanelExpanded(false);
+        mCardViewModel.setQueueVisible(false);
+        mCardViewModel.setHistoryVisible(false);
+        mCardViewModel.setOverflowExpanded(false);
+    }
+
+    /**
+     * Restores the compact card as a static Now Playing surface.
+     *
+     * <p>Phase 1H.4 detached the pager but left the MotionScene attached. A restored/end
+     * MotionLayout progress could therefore leave every Now Playing child at alpha 0 even though
+     * the queue page itself was gone. Phase 1H.5 removes that scene from XML and defensively
+     * restores the visible children after view-state restoration.</p>
+     */
+    private void forceStaticNowPlayingVisible() {
+        resetToNowPlayingOnControllerStart();
+        mPanel.setEnabled(false);
+        unselectAllPanelButtons();
+
+        View secondary = mView.findViewById(R.id.media_card_panel_content_container);
+        if (secondary != null) {
+            secondary.setVisibility(View.GONE);
+        }
+        if (mPager != null) {
+            mPager.setVisibility(View.GONE);
+        }
+        if (mQueueButton != null) {
+            mQueueButton.setVisibility(View.GONE);
+        }
+        if (mSecondaryPageTitle != null) {
+            mSecondaryPageTitle.setVisibility(View.GONE);
+        }
+
+        restoreStaticView(R.id.empty_panel, true);
+        restoreStaticView(R.id.album_art, true);
+        restoreStaticView(R.id.arda_media_art_scrim, true);
+        restoreStaticView(R.id.media_widget_app_icon, true);
+        restoreStaticView(R.id.button_panel_background, true);
+        restoreStaticView(R.id.title, true);
+        restoreStaticView(R.id.subtitle, true);
+        restoreStaticView(R.id.playback_seek_bar, false);
+        restoreStaticView(R.id.playback_time, false);
+        restoreStaticView(R.id.play_pause_button, true);
+        restoreStaticView(R.id.playback_action_id1, false);
+        restoreStaticView(R.id.playback_action_id2, false);
+
+        mSeekBar.setEnabled(true);
+        updatePlaybackTime(mDataModel.getProgress().getValue());
+    }
+
+    private void restoreStaticView(int id, boolean forceVisible) {
+        View view = mView.findViewById(id);
+        if (view == null) {
+            return;
+        }
+        view.setAlpha(1f);
+        if (forceVisible) {
+            view.setVisibility(View.VISIBLE);
+        }
     }
 
     @Override
@@ -267,6 +314,7 @@ public class MediaCardController extends PlaybackCardController implements
     protected void updateProgress(PlaybackProgress progress) {
         super.updateProgress(progress);
         ViewUtils.setVisible(mSeekBar, progress != null && progress.hasTime());
+        updatePlaybackTime(progress);
         if (progress == null || !progress.hasTime()) {
             mLogo.setVisibility(View.GONE);
         } else if (mDataModel.getMetadata().getValue() != null) {
@@ -274,6 +322,23 @@ public class MediaCardController extends PlaybackCardController implements
             if (logoUri != null && !mCardViewModel.getPanelExpanded()) {
                 mLogo.setVisibility(View.VISIBLE);
             }
+        }
+    }
+
+    private void updatePlaybackTime(PlaybackProgress progress) {
+        if (mPlaybackTimeView == null) {
+            return;
+        }
+        boolean showTime = progress != null
+                && progress.hasTime()
+                && !mCardViewModel.getPanelExpanded();
+        ViewUtils.setVisible(mPlaybackTimeView, showTime);
+        if (showTime) {
+            mPlaybackTimeView.setText(new StringBuilder(progress.getCurrentTimeText())
+                    .append(" / ")
+                    .append(progress.getMaxTimeText()));
+        } else {
+            mPlaybackTimeView.setText(null);
         }
     }
 
@@ -286,13 +351,10 @@ public class MediaCardController extends PlaybackCardController implements
                     updateSkipButtonsAndReturnUsedStandardCustomActions(
                             playbackState, playbackController);
 
-            boolean hasCustomActions = playbackState.getCustomActions().size() != 0;
-            boolean isPreviouslyVisible = ViewUtils.isVisible(mActionOverflowButton);
-            ViewUtils.setVisible(mActionOverflowButton, hasCustomActions);
-            mPagerAdapter.setHasOverflow(hasCustomActions);
-            if (mCardViewModel.getPanelExpanded() && isPreviouslyVisible != hasCustomActions) {
-                animateClosePanel();
-            }
+            // Custom actions remain handled by the media session/controller; there is no third
+            // overflow page in the two-page ARDA surface.
+            ViewUtils.setVisible(mActionOverflowButton, false);
+            mPagerAdapter.setHasOverflow(false);
             mPagerAdapter.notifyPlaybackStateChanged(playbackState,
                     playbackController, usedCustomActions);
         } else {
@@ -311,153 +373,159 @@ public class MediaCardController extends PlaybackCardController implements
     @Override
     protected void setUpActionsOverflowButton() {
         super.setUpActionsOverflowButton();
-        setOverflowState(mCardViewModel.getOverflowExpanded(), false);
+        ViewUtils.setVisible(mActionOverflowButton, false);
+        selectOverflow(false);
     }
 
     @Override
     protected void handleCustomActionsOverflowButtonClicked(View overflow) {
-        super.handleCustomActionsOverflowButtonClicked(overflow);
-        setOverflowState(mCardViewModel.getOverflowExpanded(), true);
+        // No third overflow page in the two-page ARDA media surface.
     }
 
     @Override
     protected void setUpQueueButton() {
         super.setUpQueueButton();
-        setQueueState(mCardViewModel.getQueueVisible(), false);
+        ViewUtils.setVisible(mQueueButton, false);
+        selectQueue(false);
     }
 
     @Override
     protected void updateQueueState(boolean hasQueue, boolean isQueueVisible) {
-        super.updateQueueState(hasQueue, isQueueVisible);
         mPagerAdapter.setHasQueue(hasQueue);
-        ViewUtils.setVisible(mQueueButton, hasQueue);
-        if (mCardViewModel.getPanelExpanded() && !hasQueue) {
-            animateClosePanel();
-        }
+        ViewUtils.setVisible(mQueueButton, false);
+        forceStaticNowPlayingVisible();
     }
 
     @Override
     protected void handleQueueButtonClicked(View queue) {
-        super.handleQueueButtonClicked(queue);
-        setQueueState(mCardViewModel.getQueueVisible(), true);
+        // Queue is intentionally disabled during the Now Playing visual pass.
+        resetToNowPlayingOnControllerStart();
     }
 
     @Override
     protected void setUpHistoryButton() {
         super.setUpHistoryButton();
-        setHistoryState(mCardViewModel.getHistoryVisible(), false);
+        ViewUtils.setVisible(mHistoryButton, false);
+        selectHistory(false);
     }
 
     @Override
     protected void handleHistoryButtonClicked(View history) {
-        super.handleHistoryButtonClicked(history);
-        setHistoryState(mCardViewModel.getHistoryVisible(), true);
+        // History/source page is intentionally disabled with Queue.
+        resetToNowPlayingOnControllerStart();
     }
 
     private void setOverflowState(boolean isExpanded, boolean stateSetThroughClick) {
-        if (mActionOverflowButton == null) {
-            return;
-        }
-        if (!mCardViewModel.getPanelExpanded()) {
-            if (stateSetThroughClick) {
-                saveViewVisibilityBeforeAnimation();
-                mCardViewModel.setPanelExpanded(true);
-
-                mPager.setCurrentItem(getOverflowTabIndex());
-
-                mHandler.post(() -> mMotionLayout.transitionToEnd());
-
-                selectOverflow(true);
-            } else {
-                unselectPanel();
-            }
-        } else {
-            // If the panel is already open and overflow is clicked again,
-            // always switch to overflow tab
-            mPager.setCurrentItem(getOverflowTabIndex(), true);
-            mPanel.setEnabled(true);
-
-            selectOverflow(true);
-
-            selectQueue(false);
-            selectHistory(false);
-        }
+        selectOverflow(false);
     }
 
     private void setQueueState(boolean isVisible, boolean stateSetThroughClick) {
-        if (mQueueButton == null) {
-            return;
-        }
-        if (!mCardViewModel.getPanelExpanded()) {
-            if (stateSetThroughClick) {
-                saveViewVisibilityBeforeAnimation();
-                mCardViewModel.setPanelExpanded(true);
-                mPager.setCurrentItem(getQueueTabIndex());
-
-                mHandler.post(() -> mMotionLayout.transitionToEnd());
-
-                selectQueue(true);
-            } else {
-                unselectPanel();
-            }
-        } else {
-            // If the panel is already open and queue is clicked again,
-            // always switch to queue tab
-            mPager.setCurrentItem(getQueueTabIndex(), true);
-
-            mPanel.setEnabled(true);
-
-            selectQueue(true);
-
-            selectOverflow(false);
-            selectHistory(false);
-        }
+        selectQueue(false);
     }
 
     private void setHistoryState(boolean isVisible, boolean stateSetThroughClick) {
-        if (mHistoryButton == null) {
+        selectHistory(false);
+    }
+
+
+    /**
+     * Adds a direct gesture bridge to the nested queue/history RecyclerView.
+     *
+     * <p>The parent MotionLayout observes the whole card, but some CarUiRecyclerView builds keep
+     * ownership of their touch stream after intercepting it. This listener switches pages at the
+     * list level as soon as a clearly horizontal drag crosses the threshold. Vertical scrolling is
+     * never intercepted.</p>
+     */
+    private void installSecondaryRecyclerSwipeBridge(ViewGroup container, int recyclerViewId) {
+        View candidate = container.findViewById(recyclerViewId);
+        if (!(candidate instanceof RecyclerView)) {
             return;
         }
-        int historyPos = getHistoryTabIndex();
-        if (!mCardViewModel.getPanelExpanded()) {
-            if (stateSetThroughClick) {
-                saveViewVisibilityBeforeAnimation();
-                mCardViewModel.setPanelExpanded(true);
-                mPager.setCurrentItem(historyPos);
+        RecyclerView recyclerView = (RecyclerView) candidate;
+        int touchSlop = ViewConfiguration.get(recyclerView.getContext()).getScaledTouchSlop();
+        int thresholdPx = Math.max(touchSlop * 3, Math.round(28f
+                * recyclerView.getResources().getDisplayMetrics().density));
 
-                mHandler.post(() -> mMotionLayout.transitionToEnd());
+        recyclerView.addOnItemTouchListener(new RecyclerView.SimpleOnItemTouchListener() {
+            private float mDownX;
+            private float mDownY;
+            private boolean mTracking;
+            private boolean mTriggered;
 
-                selectHistory(true);
-            } else {
-                unselectPanel();
+            @Override
+            public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent event) {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    mDownX = event.getX();
+                    mDownY = event.getY();
+                    mTracking = event.getPointerCount() == 1;
+                    mTriggered = false;
+                    return false;
+                }
+                if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                    mTracking = false;
+                    return false;
+                }
+                if (action == MotionEvent.ACTION_MOVE) {
+                    if (!mTracking || mTriggered || event.getPointerCount() != 1) {
+                        return mTriggered;
+                    }
+                    float dx = event.getX() - mDownX;
+                    float dy = event.getY() - mDownY;
+                    if (Math.abs(dx) >= thresholdPx
+                            && Math.abs(dx) > Math.abs(dy) * 1.08f) {
+                        mTriggered = true;
+                        rv.stopScroll();
+                        rv.post(MediaCardController.this::toggleMediaPage);
+                        return true;
+                    }
+                    return false;
+                }
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    boolean consume = mTriggered;
+                    mTracking = false;
+                    mTriggered = false;
+                    return consume;
+                }
+                return mTriggered;
             }
-        } else {
-            // If the panel is already open and history is clicked again,
-            // always switch to history tab
-            mPager.setCurrentItem(historyPos, true);
 
-            mPanel.setEnabled(true);
+            @Override
+            public void onTouchEvent(RecyclerView rv, MotionEvent event) {
+                if (event.getActionMasked() == MotionEvent.ACTION_UP
+                        || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                    mTracking = false;
+                    mTriggered = false;
+                }
+            }
+        });
+    }
 
-            selectHistory(true);
 
-            selectOverflow(false);
-            selectQueue(false);
+    private void toggleMediaPage() {
+        forceStaticNowPlayingVisible();
+    }
+
+    private void openSecondaryPage() {
+        // Intentionally disabled in ARDA_MEDIA_PHASE1H5_STATIC_NOW_PLAYING.
+        forceStaticNowPlayingVisible();
+    }
+
+    private void updateSecondaryPageTitle(boolean hasQueue) {
+        if (mSecondaryPageTitle != null) {
+            mSecondaryPageTitle.setText(hasQueue
+                    ? R.string.media_card_queue_header_title
+                    : R.string.media_card_history_header_title);
         }
     }
 
     private void launchMediaAppOrClosePanel() {
-        if (mCardViewModel.getPanelExpanded()) {
-            animateClosePanel();
-        } else {
-            mMediaLaunchRouter.handleLaunchMedia(mDataModel.getMediaSource().getValue());
-        }
+        forceStaticNowPlayingVisible();
+        mMediaLaunchRouter.handleLaunchMedia(mDataModel.getMediaSource().getValue());
     }
 
     private void animateClosePanel() {
-        mCardViewModel.setPanelExpanded(false);
-        mMotionLayout.transitionToStart();
-        restoreExtraViewsWhenPanelClosed();
-        unselectAllPanelButtons();
+        forceStaticNowPlayingVisible();
     }
 
     private void unselectPanel() {
@@ -467,17 +535,23 @@ public class MediaCardController extends PlaybackCardController implements
 
     private void selectQueue(boolean shouldSelect) {
         mCardViewModel.setQueueVisible(shouldSelect);
-        mQueueButton.setSelected(shouldSelect);
+        if (mQueueButton != null) {
+            mQueueButton.setSelected(shouldSelect);
+        }
     }
 
     private void selectOverflow(boolean shouldSelect) {
         mCardViewModel.setOverflowExpanded(shouldSelect);
-        mActionOverflowButton.setSelected(shouldSelect);
+        if (mActionOverflowButton != null) {
+            mActionOverflowButton.setSelected(shouldSelect);
+        }
     }
 
     private void selectHistory(boolean shouldSelect) {
         mCardViewModel.setHistoryVisible(shouldSelect);
-        mHistoryButton.setSelected(shouldSelect);
+        if (mHistoryButton != null) {
+            mHistoryButton.setSelected(shouldSelect);
+        }
     }
 
     private void unselectAllPanelButtons() {
@@ -530,7 +604,7 @@ public class MediaCardController extends PlaybackCardController implements
         if ((isSkipNextEnabled || isSkipNextReserved)) {
             updateButton(mSkipNextButton, mView.getContext().getDrawable(
                     com.android.car.media.common.R.drawable.ic_skip_next),
-                    mView.getContext().getDrawable(R.drawable.media_card_button_background),
+                    mView.getContext().getDrawable(R.drawable.arda_media_round_button_background),
                     true, isSkipNextEnabled, (v) -> {
                 if (playbackController != null) {
                     playbackController.skipToNext();
@@ -561,7 +635,7 @@ public class MediaCardController extends PlaybackCardController implements
         if ((isSkipPrevEnabled || isSkipPrevReserved)) {
             updateButton(mSkipPrevButton, mView.getContext().getDrawable(
                     com.android.car.media.common.R.drawable.ic_skip_previous),
-                    mView.getContext().getDrawable(R.drawable.media_card_button_background),
+                    mView.getContext().getDrawable(R.drawable.arda_media_round_button_background),
                     true, isSkipPrevEnabled, (v) -> {
                     if (playbackController != null) {
                         playbackController.skipToPrevious();
@@ -601,7 +675,7 @@ public class MediaCardController extends PlaybackCardController implements
                 .fetchDrawable(mView.getContext());
         if (customAction != null) {
             updateButton(button, customAction.mIcon, mView.getContext().getDrawable(
-                    R.drawable.media_card_button_background), true, true, (v) -> {
+                    R.drawable.arda_media_round_button_background), true, true, (v) -> {
                 if (playbackController != null) {
                         playbackController.doCustomAction(
                                 customAction.mAction, customAction.mExtras);
@@ -615,20 +689,18 @@ public class MediaCardController extends PlaybackCardController implements
     }
 
     private int getOverflowTabIndex() {
-        return hasOverflow() ? 0 : -1;
+        return -1;
     }
 
     private int getQueueTabIndex() {
-        if (!getMediaHasQueue()) return -1;
-        return getOverflowTabIndex() + 1;
+        return getMediaHasQueue() ? 0 : -1;
     }
 
     private int getHistoryTabIndex() {
-        return max(getOverflowTabIndex(), getQueueTabIndex()) + 1;
+        return getMediaHasQueue() ? -1 : 0;
     }
 
     private boolean hasOverflow() {
-        PlaybackStateWrapper playbackState = mDataModel.getPlaybackStateWrapper().getValue();
-        return playbackState != null && playbackState.getCustomActions().size() != 0;
+        return false;
     }
 }

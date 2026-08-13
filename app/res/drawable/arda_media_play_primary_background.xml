@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARDA_MEDIA_PHASE1H6_TONAL_PLAY_BUTTON: translucent fill inherits the local album-art tone. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="29dp" />
+    <solid android:color="#52FFFFFF" />
+    <stroke
+        android:width="1dp"
+        android:color="#35FFFFFF" />
+</shape>
