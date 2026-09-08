@@ -91,7 +91,9 @@ public final class CarLauncherViewModel extends ViewModel implements DefaultLife
         mRemoteCarTaskView = new MutableLiveData<>(/* value= */ null);
         mHostLifecycle = new CarTaskViewControllerHostLifecycle();
         ControlledRemoteCarTaskViewCallback controlledRemoteCarTaskViewCallback =
-                new ControlledRemoteCarTaskViewCallbackImpl(mRemoteCarTaskView);
+                new ControlledRemoteCarTaskViewCallbackImpl(
+                        mRemoteCarTaskView,
+                        () -> mWindowContext.startActivity(new Intent(mMapsIntent)));
 
         CarTaskViewControllerCallback carTaskViewControllerCallback =
                 new CarTaskViewControllerCallbackImpl(controlledRemoteCarTaskViewCallback);
@@ -169,10 +171,13 @@ public final class CarLauncherViewModel extends ViewModel implements DefaultLife
     private static final class ControlledRemoteCarTaskViewCallbackImpl implements
             ControlledRemoteCarTaskViewCallback {
         private final MutableLiveData<RemoteCarTaskView> mRemoteCarTaskView;
+        private final Runnable mLaunchMaps;
 
         private ControlledRemoteCarTaskViewCallbackImpl(
-                MutableLiveData<RemoteCarTaskView> remoteCarTaskView) {
+                MutableLiveData<RemoteCarTaskView> remoteCarTaskView,
+                Runnable launchMaps) {
             mRemoteCarTaskView = remoteCarTaskView;
+            mLaunchMaps = launchMaps;
         }
 
         @Override
@@ -181,6 +186,15 @@ public final class CarLauncherViewModel extends ViewModel implements DefaultLife
                 Log.d(TAG, "MapsTaskView: onTaskViewCreated");
             }
             mRemoteCarTaskView.setValue(taskView);
+
+        // ARDA_MAPS_GENERIC_COLDSTART_V1
+        // mMapsIntent is already resolved generically from ACTION_MAIN + CATEGORY_APP_MAPS
+        // (plus the preferred map activity config). Never hardcode a Maps package here.
+        taskView.postDelayed(() -> {
+            if (taskView.getTaskInfo() == null) {
+                mLaunchMaps.run();
+            }
+        }, 700);
         }
 
         @Override
@@ -228,7 +242,7 @@ public final class CarLauncherViewModel extends ViewModel implements DefaultLife
             carTaskViewController.createControlledRemoteCarTaskView(
                     new ControlledRemoteCarTaskViewConfig.Builder()
                             .setActivityIntent(mMapsIntent)
-                            .setShouldAutoRestartOnTaskRemoval(sAutoRestartOnCrash)
+                            .setShouldAutoRestartOnTaskRemoval(true)
                             .build(),
                     mWindowContext.getMainExecutor(),
                     mControlledRemoteCarTaskViewCallback);

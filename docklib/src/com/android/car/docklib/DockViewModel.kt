@@ -15,6 +15,8 @@
  */
 
 package com.android.car.docklib
+import android.provider.Settings
+import android.content.Intent
 
 import android.app.ActivityManager
 import android.app.ActivityTaskManager
@@ -60,6 +62,157 @@ open class DockViewModel(
         private val dockProtoDataController: DockProtoDataController,
         private val observer: Observer<List<DockAppItem>>,
 ) {
+    // ARDA_DOCK_RECENT_MAP_V1
+    private val ardaRecentMapSetting = "arda_dock_show_recent_map"
+    private val ardaRecentAppSetting = "arda_dock_show_recent_app"
+
+    private var ardaRecentMapComponent: ComponentName? = null
+    private var ardaRecentAppComponent: ComponentName? = null
+
+    // null = derive from Settings.Global.
+    // 0 = original dock capacity.
+    // 1 = one extra dynamic slot.
+    private var ardaCapacityExtraOverride: Int? = null
+
+    private fun ardaShowRecentMap(): Boolean =
+        Settings.Global.getInt(
+            context.contentResolver,
+            ardaRecentMapSetting,
+            1,
+        ) != 0
+
+    private fun ardaShowRecentApp(): Boolean =
+        Settings.Global.getInt(
+            context.contentResolver,
+            ardaRecentAppSetting,
+            1,
+        ) != 0
+
+    private val ardaEffectiveMaxItemsInDock: Int
+        get() {
+            val extra = ardaCapacityExtraOverride ?: run {
+                val desiredDynamicSlots =
+                    (if (ardaShowRecentMap()) 1 else 0) +
+                    (if (ardaShowRecentApp()) 1 else 0)
+                desiredDynamicSlots - 1
+            }
+            return (maxItemsInDock + extra).coerceAtLeast(1)
+        }
+
+
+    // ARDA_DOCK_PERSISTENT_RECENTS_V2
+    private val ardaRecentMapComponentSetting = "arda_dock_recent_map_component"
+    private val ardaRecentAppComponentSetting = "arda_dock_recent_app_component"
+
+    private fun ardaPersistComponent(setting: String, component: ComponentName?) {
+        Settings.Global.putString(
+            context.contentResolver,
+            setting,
+            component?.flattenToString(),
+        )
+    }
+
+    private fun ardaReadPersistedComponent(setting: String): ComponentName? =
+        Settings.Global.getString(context.contentResolver, setting)
+            ?.let(ComponentName::unflattenFromString)
+
+    private fun ardaHydratePersistedRecents() {
+        if (ardaRecentMapComponent == null) {
+            ardaRecentMapComponent = ardaReadPersistedComponent(ardaRecentMapComponentSetting)
+        }
+        if (ardaRecentAppComponent == null) {
+            ardaRecentAppComponent = ardaReadPersistedComponent(ardaRecentAppComponentSetting)
+        }
+    }
+
+    private fun ardaIsHomeComponent(component: ComponentName): Boolean {
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        return runCatching {
+            context.packageManager.queryIntentActivities(homeIntent, 0).any { resolveInfo ->
+                resolveInfo.activityInfo?.packageName == component.packageName
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun ardaReplayPersistentRecents() {
+        val showMap = ardaShowRecentMap()
+        val showApp = ardaShowRecentApp()
+        try {
+            when {
+                showMap && showApp -> {
+                    ardaCapacityExtraOverride = 0
+                    ardaRecentMapComponent?.let(::ardaAddDynamicItemInternal)
+                    ardaCapacityExtraOverride = 1
+                    ardaRecentAppComponent
+                        ?.takeIf { it != ardaRecentMapComponent }
+                        ?.let(::ardaAddDynamicItemInternal)
+                }
+                showMap -> {
+                    ardaCapacityExtraOverride = 0
+                    ardaRecentMapComponent?.let(::ardaAddDynamicItemInternal)
+                }
+                showApp -> {
+                    ardaCapacityExtraOverride = 0
+                    ardaRecentAppComponent?.let(::ardaAddDynamicItemInternal)
+                }
+                else -> {
+                    ardaCapacityExtraOverride = null
+                    createDockList()
+                }
+            }
+        } finally {
+            ardaCapacityExtraOverride = null
+        }
+        Log.d(
+            "DockViewModel",
+            "ARDA_DOCK_PERSISTENT_RECENTS map=$ardaRecentMapComponent " +
+                "app=$ardaRecentAppComponent showMap=$showMap showApp=$showApp " +
+                "max=$ardaEffectiveMaxItemsInDock",
+        )
+    }
+
+    private fun ardaIsMapComponent(component: ComponentName): Boolean {
+        val selector = Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_APP_MAPS)
+            .setPackage(component.packageName)
+
+        return runCatching {
+            context.packageManager
+                .queryIntentActivities(selector, 0)
+                .any { resolveInfo ->
+                    resolveInfo.activityInfo?.packageName == component.packageName
+                }
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Final dynamic order:
+     *   [... pinned ...] [recent map/navigation] [recent non-map app]
+     *
+     * Existing DockViewModel logic still owns exclusions, persistence,
+     * icon creation, task launch and duplicate handling.
+     */
+    fun addDynamicItem(component: ComponentName) {
+        ardaHydratePersistedRecents()
+
+        if (ardaIsHomeComponent(component)) {
+            Log.d("DockViewModel", "ARDA_DOCK_HOME_IGNORED component=$component")
+            ardaReplayPersistentRecents()
+            return
+        }
+
+        if (ardaIsMapComponent(component)) {
+            ardaRecentMapComponent = component
+            ardaPersistComponent(ardaRecentMapComponentSetting, ardaRecentMapComponent)
+        } else {
+            ardaRecentAppComponent = component
+            ardaPersistComponent(ardaRecentAppComponentSetting, ardaRecentAppComponent)
+        }
+
+        ardaReplayPersistentRecents()
+    }
+
+
 
     private companion object {
         private const val TAG = "DockViewModel"
@@ -102,7 +255,7 @@ open class DockViewModel(
             }
         } ?: run {
             if (DEBUG) Log.d(TAG, "Initialized using default items")
-            for (index in 0..<minOf(maxItemsInDock, defaultPinnedItems.size)) {
+            for (index in 0..<minOf(ardaEffectiveMaxItemsInDock, defaultPinnedItems.size)) {
                 createDockItem(
                     defaultPinnedItems[index],
                     DockAppItem.Type.STATIC,
@@ -148,7 +301,7 @@ open class DockViewModel(
             isMediaApp(component)
         )?.let { dockItem ->
             if (indexToPin != null) {
-                if (indexToPin in 0..<maxItemsInDock) {
+                if (indexToPin in 0..<ardaEffectiveMaxItemsInDock) {
                     if (DEBUG) Log.d(TAG, "Pinning $component at $indexToPin")
                     internalItems[indexToPin] = dockItem
                 } else {
@@ -220,7 +373,7 @@ open class DockViewModel(
      * refreshed. If not, and the dock has dynamic item(s) to update, then it will replace the least
      * recent dynamic item.
      */
-    fun addDynamicItem(component: ComponentName) {
+    private fun ardaAddDynamicItemInternal(component: ComponentName) {
         if (DEBUG) Log.d(TAG, "Add dynamic item, component: $component")
         if (isItemExcluded(component)) {
             if (DEBUG) Log.d(TAG, "Dynamic item is excluded")
@@ -233,7 +386,7 @@ open class DockViewModel(
         val indexToUpdate =
                 indexOfItemWithPackageName(component.packageName)
                         ?: indexOfLeastRecentDynamicItemInDock()
-        if (indexToUpdate == null || indexToUpdate >= maxItemsInDock) return
+        if (indexToUpdate == null || indexToUpdate >= ardaEffectiveMaxItemsInDock) return
 
         createDockItem(
             component,
@@ -276,7 +429,7 @@ open class DockViewModel(
         // todo(b/312718542): hidden api(ActivityTaskManager.getTasks) usage
         val runningTaskList = getRunningTasks().filter { it.userId == userId }
 
-        for (index in 0..<maxItemsInDock) {
+        for (index in 0..<ardaEffectiveMaxItemsInDock) {
             if (internalItems.contains(index)) continue
 
             var isItemFound = false
@@ -332,12 +485,12 @@ open class DockViewModel(
 
     /** Use the mapping index->item to create the ordered list of Dock items */
     private fun convertMapToList(map: Map<Int, DockAppItem>): List<DockAppItem> =
-            List(maxItemsInDock) { index -> map[index] }.filterNotNull()
+            List(ardaEffectiveMaxItemsInDock) { index -> map[index] }.filterNotNull()
     // TODO b/314409899: use a default DockItem when a position is empty
 
     private fun findIndexToPin(): Int? {
         var index: Int? = null
-        for (i in 0..<maxItemsInDock) {
+        for (i in 0..<ardaEffectiveMaxItemsInDock) {
             if (!internalItems.contains(i)) {
                 index = i
                 break
@@ -354,10 +507,10 @@ open class DockViewModel(
         if (DEBUG) {
             Log.d(
                     TAG,
-                    "internalItems.size = ${internalItems.size}, maxItemsInDock= $maxItemsInDock"
+                    "internalItems.size = ${internalItems.size}, ardaEffectiveMaxItemsInDock= $ardaEffectiveMaxItemsInDock"
             )
         }
-        if (internalItems.size < maxItemsInDock) return internalItems.size
+        if (internalItems.size < ardaEffectiveMaxItemsInDock) return internalItems.size
         // since map is ordered from least recent to most recent, return first dynamic entry found
         internalItems.forEach { appItemEntry ->
             if (appItemEntry.value.type == DockAppItem.Type.DYNAMIC) return appItemEntry.key
